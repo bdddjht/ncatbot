@@ -16,6 +16,7 @@ from ncatbot.conn.http import check_websocket
 from ncatbot.core.api import BotAPI
 from ncatbot.core.message import GroupMessage, PrivateMessage
 from ncatbot.plugin.loader import Event, PluginLoader
+from ncatbot.utils.check_version import check_version
 from ncatbot.utils.config import config
 from ncatbot.utils.literals import (
     INSTALL_CHECK_PATH,
@@ -309,7 +310,14 @@ class BotClient:
                 exit(0)
             os.chdir(base_path)
         if reload:
-            asyncio.run(self.run_async())
+            version_ok = check_version()
+            if not version_ok:
+                exit(0)
+            try:
+                asyncio.run(self.run_async())
+            except KeyboardInterrupt:
+                _log.info("正常退出")
+                exit(0)
         elif not reload:
             base_path = os.getcwd()
 
@@ -349,4 +357,11 @@ class BotClient:
                     exit(0)
 
             _log.info("连接 napcat websocket 服务器成功!")
-            asyncio.run(self.run_async())
+            version_ok = check_version()
+            if not version_ok:
+                exit(0)
+            try:
+                asyncio.run(self.run_async())
+            except KeyboardInterrupt:
+                _log.info("正常退出")
+                exit(0)
