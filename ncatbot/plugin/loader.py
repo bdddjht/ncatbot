@@ -163,6 +163,15 @@ class PluginLoader:
             _log.info("插件目录不存在, 跳过插件加载")
             return
         models, packs = self._load_modules_from_directory(directory_path=PLUGINS_DIR)
+        ipacks = PluginLoader.check_packages(packs)
+        if ipacks:
+            print(*ipacks)
+            u = input(f'是否安装以上python 包。将安装于当前环境 {sys.executable}: (yes/no)')
+            if u.upper() in ('Y','YES'):
+                _log.info('开始安装')
+                PluginLoader.install_package(ipacks)
+            else:
+                _log.info('跳过安装')
         plugins = []
         for plugin in models.values():
             for plugin_class_name in plugin.__all__:
@@ -199,6 +208,7 @@ class PluginLoader:
             else:
                 _log.info(f"'{package}' 未安装")
                 packs.append(package)
+        return packs
 
     @staticmethod
     def check_package_version(package):
