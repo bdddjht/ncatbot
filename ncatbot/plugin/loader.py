@@ -10,6 +10,7 @@ Raises:
 
 import functools
 import importlib
+import importlib.metadata
 import os
 import sys
 from collections import defaultdict, deque
@@ -29,6 +30,7 @@ from ncatbot.plugin.base_plugin import BasePlugin
 from ncatbot.plugin.config import PLUGINS_DIR
 from ncatbot.plugin.custom_err import (
     PluginCircularDependencyError,
+    PluginCompatibilityError,
     PluginDependencyError,
     PluginVersionError,
 )
@@ -160,7 +162,7 @@ class PluginLoader:
         if not os.path.exists(PLUGINS_DIR):
             _log.info("插件目录不存在, 跳过插件加载")
             return
-        models: Dict = self._load_modules_from_directory(directory_path=PLUGINS_DIR)
+        models, packs = self._load_modules_from_directory(directory_path=PLUGINS_DIR)
         plugins = []
         for plugin in models.values():
             for plugin_class_name in plugin.__all__:
@@ -169,14 +171,52 @@ class PluginLoader:
         self.load_compatible_data(self.plugins.values())
         return self.plugins.values()
 
+    @staticmethod
+    def install_package(package: list[str]):
+        '''从列表安装包'''
+        # 使用 os.system 调用 pip
+        os.system(f"{sys.executable} -m pip install {' '.join(package)}")
+
+    @staticmethod
+    def check_packages(packages):
+        """
+        检查给定的包是否已安装。
+        使用 os.system 调用 pip 来检查包。
+
+        参数:
+            packages (list): 要检查的包名列表。
+        """
+        packs = []
+        for package in packages:
+            # 使用 pip show 来检查包是否存在
+            # 如果包存在，会返回 0，否则返回非 0
+            result = os.system(f"pip show {package}")
+            if result == 0:
+                _log.debug(f"'{package}' 已经安装")
+                version = PluginLoader.check_package_version(package)
+                if not version:
+                    raise PluginCompatibilityError(f'{package} 与环境不兼容，找到的版本是 {version}')
+            else:
+                _log.info(f"'{package}' 未安装")
+                packs.append(package)
+
+    @staticmethod
+    def check_package_version(package):
+        '''检查已安装包版本'''
+        try:
+            version = importlib.metadata.version(package)
+            return version
+        except importlib.metadata.PackageNotFoundError:
+            return False
+
     def load_compatible_data(self, plugins):
+        """加载兼容注册事件"""
         def find_instance(func):
             plugin_name = func.__qualname__.split(".")[0]
             for plugin in plugins:
                 if plugin.__class__.__name__ == plugin_name:
                     return plugin
 
-        """加载兼容注册事件"""
         _log.debug("加载兼容注册事件")
         compatible = CompatibleEnrollment.events
         for event_type, funcs in compatible.items():
@@ -246,13 +286,14 @@ class PluginLoader:
 
     def _load_modules_from_directory(
         self, directory_path: str
-    ) -> Dict[str, ModuleType]:
+    ) -> Dict[str, 'ModuleType']:
         """
-        从指定文件夹动态加载模块，返回模块名到模块的字典。
+        从指定文件夹动态加载模块，返回模块名到模块的字典和所有python包依赖。
         不修改 `sys.path`，仅在必要时临时添加路径。
         """
         # 存储模块的字典
         modules = {}
+        packs = []
 
         # 避免重复添加目录到 sys.path
         original_sys_path = sys.path.copy()
@@ -265,15 +306,35 @@ class PluginLoader:
             # 遍历文件夹中的所有文件
             for filename in os.listdir(directory_path):
                 # 忽略非文件夹
-                if not os.path.isdir(os.path.join(directory_path, filename)):
+                module_dir = os.path.join(directory_path, filename)
+                if not os.path.isdir(module_dir):
                     continue
+
+                # 检查 __init__.py 文件是否存在
+                init_file = os.path.join(module_dir, "__init__.py")
+                if not os.path.exists(init_file):
+                    _log.debug(f"'{filename}' 不包含 __init__.py 文件，跳过...")
+                    continue
+
                 # 异常捕获，防止导入失败导致程序崩溃
                 try:
                     # 动态导入模块
                     module = importlib.import_module(filename)
                     modules[filename] = module
+
+                    # 查找 requirements.txt 文件
+                    requirements_file = os.path.join(module_dir, "requirements.txt")
+                    if os.path.exists(requirements_file):
+                        # 读取 requirements.txt 文件内容
+                        with open(requirements_file, 'r') as f:
+                            for line in f:
+                                # 去掉空格和注释行
+                                package = line.strip()
+                                if package and not package.startswith('#'):
+                                    packs.append(package)
+
                 except ImportError as e:
-                    _log.error(f"导入模块 {filename} 时出错: {e}")
+                    _log.error(f"导入 {filename} 时出错: {e}")
                     continue
 
         finally:
@@ -281,7 +342,7 @@ class PluginLoader:
             sys.path = original_sys_path
 
         # 返回所有加载成功的模块字典
-        return modules
+        return modules, packs
 
 
 # endregion
